@@ -1,0 +1,97 @@
+import ccxt
+import pandas as pd
+import numpy as np
+from datetime import datetime
+import time
+
+# Binance API Konfiguration
+api_key = 'DEINE_API_KEY'
+api_secret = 'DEIN_API_SECRET'
+exchange = ccxt.binance({
+    'apiKey': api_key,
+    'secret': api_secret,
+    'enableRateLimit': True
+})
+
+# Handelskonfiguration
+symbol = 'BTC/USDT'
+timeframe = '1h'
+investment_amount = 100  # Investitionsbetrag in EUR oder äquivalent
+stop_loss_ratio = 0.95  # Stop-Loss auf 95% des Kaufpreises für Long, 105% für Short
+
+def fetch_data(limit=100):
+    """Daten aus der Binance API abrufen."""
+    data = exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+    df = pd.DataFrame(data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+    df.set_index('timestamp', inplace=True)
+    return df
+
+def fibonacci_levels(data):
+    """Fibonacci Retracement Levels berechnen."""
+    high = data['high'].max()
+    low = data['low'].min()
+    diff = high - low
+    return {
+        'high': high,
+        'low': low,
+        'fibo_236': high - 0.236 * diff,
+        'fibo_382': high - 0.382 * diff,
+        'fibo_500': high - 0.500 * diff,
+        'fibo_618': high - 0.618 * diff,
+        'fibo_1618': low - 0.618 * diff
+    }
+
+def identify_elliott_waves(prices):
+    """Einfache Elliott-Wellen-Erkennung."""
+    if len(prices) >= 5 and all(prices[i] < prices[i + 1] for i in range(3)) and all(prices[i] > prices[i + 1] for i in range(3, 5)):
+        return 'bullish_impulse'
+    return None
+
+def identify_candlestick_patterns(df):
+    """Candlestick Muster erkennen."""
+    last_candle = df.iloc[-1]
+    previous_candle = df.iloc[-2]
+    if last_candle['close'] > last_candle['open'] and last_candle['close'] > previous_candle['high']:
+        return 'bullish engulfing'
+    elif last_candle['close'] < last_candle['open'] and last_candle['close'] < previous_candle['low']:
+        return 'bearish engulfing'
+    return None
+
+def determine_trade_action(df, fib_levels):
+    """Handelsentscheidungen basierend auf Fibonacci-Levels und Candlestick-Mustern treffen."""
+    trend = identify_elliott_waves(df['close'])
+    candle_pattern = identify_candlestick_patterns(df)
+    current_price = df['close'].iloc[-1]
+    if (trend == 'bullish_impulse' or candle_pattern == 'bullish engulfing') and current_price < fib_levels['fibo_500']:
+        return 'buy', fib_levels['fibo_1618']
+    elif candle_pattern == 'bearish engulfing' and current_price > fib_levels['fibo_500']:
+        return 'sell', fib_levels['fibo_236']
+    return None, None
+
+def execute_trade(order_type, target_price):
+    """Handelsorder ausführen und Stop-Loss einrichten."""
+    amount = investment_amount / exchange.fetch_ticker(symbol)['last']
+    if order_type == 'buy':
+        order = exchange.create_market_buy_order(symbol, amount)
+        stop_loss_price = order['price'] * stop_loss_ratio
+        exchange.create_limit_sell_order(symbol, amount, stop_loss_price)
+        print(f'Kauforder ausgeführt: {order}, Stop-Loss gesetzt bei: {stop_loss_price}')
+    elif order_type == 'sell':
+        order = exchange.create_market_sell_order(symbol, amount)
+        stop_loss_price = order['price'] / stop_loss_ratio
+        exchange.create_limit_buy_order(symbol, amount, stop_loss_price)
+        print(f'Verkaufsorder ausgeführt: {order}, Stop-Loss gesetzt bei: {stop_loss_price}')
+
+def main():
+    """Hauptfunktion, die kontinuierlich die Handelsstrategie ausführt."""
+    while True:
+        df = fetch_data()
+        fib_levels = fibonacci_levels(df)
+        action, target_price = determine_trade_action(df, fib_levels)
+        if action:
+            execute_trade(action, target_price)
+        time.sleep(30)  # Strategie alle 30 Sekunden überprüfen
+
+if __name__ == "__main__":
+    main()
